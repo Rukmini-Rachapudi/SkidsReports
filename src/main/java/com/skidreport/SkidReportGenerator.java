@@ -1,20 +1,30 @@
 package com.skidreport;
 
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
+import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
-import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.FillPatternType;
-import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
-
-import java.io.*;
-import java.util.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 public class SkidReportGenerator {
 
@@ -143,11 +153,25 @@ public class SkidReportGenerator {
                 try {
                     List<FlightRecord> records = parseCsvFile(csv);
 
+                    FlightRecord prevRec = null;
+
                     for (FlightRecord rec : records) {
-                        // Skid condition — Roll col O, LatAc col P
                         boolean isSkid = (rec.roll < -10 && rec.latAc >  0.2)
                                 || (rec.roll >  10 && rec.latAc < -0.2);
+
+                        boolean isLowAlt = false;
+                        if (isSkid && prevRec != null) {
+                            boolean decreasingIas = rec.ias < prevRec.ias;
+                            boolean increasingPitch = rec.pitch > prevRec.pitch;
+                            if (rec.alt < 1400 && (decreasingIas || increasingPitch)) {
+                                isLowAlt = true;
+                            }
+                        }
+
+                        prevRec = rec;
+
                         if (!isSkid) continue;
+
 
                         // Trim to HH:MM — collapses all seconds in the same minute into one event
                         String hhmm = toHHMM(rec.time);
@@ -158,7 +182,7 @@ public class SkidReportGenerator {
                             acc = new SkidMinuteAccumulator(rec.date, hhmm);
                             minuteMap.put(key, acc);
                         }
-                        acc.add(rec.pitch, rec.roll, rec.latAc, rec.ias, rec.alt);
+                        acc.add(rec.pitch, rec.roll, rec.latAc, rec.ias, rec.alt, isLowAlt);
                     }
 
                     // records goes out of scope here — GC reclaims before next file loads
@@ -287,6 +311,7 @@ public class SkidReportGenerator {
     // ────────────────────────────────────────────────────────────────────────
     private static void writeMonthlyExcel(String tail, String yearMonth,
                                           List<SkidEvent> events, File outputDir) {
+
         String[] parts      = yearMonth.split("-");
         String year         = parts[0];
         String monthNum     = parts[1];
@@ -316,7 +341,8 @@ public class SkidReportGenerator {
             String[] headers = {
                     "Local Date", "Local Time (HH:MM:SS)", "Local Month",
                     "Pitch", "Roll", "Lateral Acceleration",
-                    "Indicated Air Speed", "Gps Altitude", "Skid Count"
+                    "Indicated Air Speed", "Gps Altitude", "Skid Count", "Number of Skid Events",
+                    "Low-Altitude-Skid-Events", "total-low-altitude-skid-event-count", "Flight name"
             };
 
             Row hRow = sheet.createRow(0);
@@ -344,9 +370,14 @@ public class SkidReportGenerator {
             altNumStyle.setFillForegroundColor(IndexedColors.LIGHT_CORNFLOWER_BLUE.getIndex());
             altNumStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
 
+            // Calculate total low-altitude events (minutes that had at least one low-alt skid second)
+            int totalLowAltEvents = 0;
+            for (SkidEvent ev : events) {
+                if (ev.lowAltFrequency > 0) totalLowAltEvents++;
+            }
+
             // ── Data rows ─────────────────────────────────────────────────
-            int rowNum        = 1;
-            int totalSkidSecs = 0;
+            int rowNum = 1;
             for (SkidEvent ev : events) {
                 Row row = sheet.createRow(rowNum);
                 boolean alt  = (rowNum % 2 == 0);
@@ -362,7 +393,25 @@ public class SkidReportGenerator {
                 createNumCell(row, 6, ev.avgIas,         csN);
                 createNumCell(row, 7, ev.avgAlt,         csN);
                 createIntCell(row, 8, ev.skidFrequency,  cs);
-                totalSkidSecs += ev.skidFrequency;
+
+                // Column J (index 9): Number of Skid Events (Total in Row 2)
+                if (rowNum == 1) {
+                    createIntCell(row, 9, events.size(), cs);
+                }
+
+                // Column K (index 10): Low-altitude skid indicator (1 per row)
+                if (ev.lowAltFrequency > 0) {
+                    createIntCell(row, 10, 1, cs);
+                }
+
+                // Column L (index 11): total-low-altitude-skid-event-count (Total in Row 2)
+                if (rowNum == 1) {
+                    createIntCell(row, 11, totalLowAltEvents, cs);
+                }
+
+                // Column M (index 12): Flight name (for all rows)
+                createStrCell(row, 12, tail, cs);
+
                 rowNum++;
             }
 
@@ -372,33 +421,12 @@ public class SkidReportGenerator {
                 sheet.setColumnWidth(i, sheet.getColumnWidth(i) + 512);
             }
 
-            // ── Summary row ───────────────────────────────────────────────
-            Row sumRow = sheet.createRow(rowNum + 1);
-            CellStyle sumStyle = wb.createCellStyle();
-            sumStyle.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
-            sumStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            Font sumFont = wb.createFont();
-            sumFont.setBold(true);
-            sumStyle.setFont(sumFont);
-
-            Cell labelCell = sumRow.createCell(0);
-            labelCell.setCellValue(yearMonth);
-            labelCell.setCellStyle(sumStyle);
-
-            Cell freqCell = sumRow.createCell(7);
-            freqCell.setCellValue("Total Skid Count: " + totalSkidSecs);
-            freqCell.setCellStyle(sumStyle);
-
-            Cell countCell = sumRow.createCell(8);
-            countCell.setCellValue("Number of Skid Events (Minutes): " + events.size());
-            countCell.setCellStyle(sumStyle);
-
             try (FileOutputStream fos = new FileOutputStream(outFile)) {
                 wb.write(fos);
             }
 
-            System.out.printf("    Written : %s  [%d skid-minute(s), %d total skid seconds]%n",
-                    outFile.getName(), events.size(), totalSkidSecs);
+            System.out.printf("    Written : %s  [%d skid-minute(s)]%n",
+                    outFile.getName(), events.size());
 
         } catch (IOException e) {
             System.err.println("  [ERROR] Failed to write " + outFile.getName() + ": " + e.getMessage());
@@ -420,28 +448,31 @@ public class SkidReportGenerator {
         final String minuteTime;
         double sumPitch, sumRoll, sumLatAc, sumIas, sumAlt;
         int count;
+        int lowAltCount;
 
         SkidMinuteAccumulator(String date, String minuteTime) {
             this.date       = date;
             this.minuteTime = minuteTime;
         }
 
-        void add(double pitch, double roll, double latAc, double ias, double alt) {
+        void add(double pitch, double roll, double latAc, double ias, double alt, boolean isLowAlt) {
             sumPitch += pitch; sumRoll += roll; sumLatAc += latAc;
             sumIas   += ias;   sumAlt  += alt;  count++;
+            if (isLowAlt) lowAltCount++;
         }
 
         SkidEvent toSkidEvent() {
-            SkidEvent ev     = new SkidEvent();
-            ev.date          = date;
-            ev.minuteTime    = minuteTime;
-            ev.month         = monthName(date);
-            ev.skidFrequency = count;
-            ev.avgPitch      = round2(sumPitch / count);
-            ev.avgRoll       = round2(sumRoll  / count);
-            ev.avgLatAc      = round2(sumLatAc / count);
-            ev.avgIas        = round2(sumIas   / count);
-            ev.avgAlt        = round2(sumAlt   / count);
+            SkidEvent ev      = new SkidEvent();
+            ev.date           = date;
+            ev.minuteTime     = minuteTime;
+            ev.month          = monthName(date);
+            ev.skidFrequency  = count;
+            ev.lowAltFrequency = lowAltCount;
+            ev.avgPitch       = round2(sumPitch / count);
+            ev.avgRoll        = round2(sumRoll  / count);
+            ev.avgLatAc       = round2(sumLatAc / count);
+            ev.avgIas         = round2(sumIas   / count);
+            ev.avgAlt         = round2(sumAlt   / count);
             return ev;
         }
     }
@@ -451,6 +482,7 @@ public class SkidReportGenerator {
         String date, minuteTime, month;
         double avgPitch, avgRoll, avgLatAc, avgIas, avgAlt;
         int skidFrequency; // qualifying seconds in this minute
+        int lowAltFrequency; // qualifying low-altitude seconds in this minute
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -495,7 +527,8 @@ public class SkidReportGenerator {
 
     private static String monthName(String date) {
         try {
-            int m = Integer.parseInt(yearMonthKey(date).split("-")[1]);
+            String ym = yearMonthKey(date);
+            int m = Integer.parseInt(ym.substring(5));
             if (m >= 1 && m <= 12) return MONTH_NAMES[m - 1];
         } catch (Exception ignored) {}
         return "Unknown";
@@ -526,4 +559,3 @@ public class SkidReportGenerator {
         cell.setCellStyle(style);
     }
 }
-
