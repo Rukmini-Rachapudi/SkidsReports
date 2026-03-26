@@ -66,7 +66,7 @@ public class DatabaseManager {
                 "  alt2        REAL,"                                     +
                 "  ias2        REAL,"                                     +
                 "  distance_ft REAL,"                                     +
-                "  year_month  TEXT"                                      +  // YYYY-MM
+                "  year_month  TEXT"                                      +
                 ")"
             );
 
