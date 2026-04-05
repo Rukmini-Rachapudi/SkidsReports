@@ -5,11 +5,15 @@ package com.skidreport.model;
  * Used by SkidReportGenerator.
  */
 public class FlightRecord {
+    public String tail;
     public String date;
     public String time;
     public double pitch;
     public double roll;
     public double latAc;
     public double ias;
-    public double alt;
+    public double alt;     // MSL feet
+    public double latitude;
+    public double longitude;
+    public double rpm;
 }
