@@ -1,7 +1,6 @@
 package com.skidreport.util;
 
 import com.skidreport.model.FlightRecord;
-import com.skidreport.model.NearMissFlightRecord;
 
 import java.io.*;
 import java.util.*;
@@ -19,7 +18,7 @@ import java.util.*;
  */
 public class CsvParser {
 
-    // -- Skid report column names --------------------------------------------
+    // -- CSV Column Name Constants ------------------------------------------
     private static final String H_DATE  = "Lcl Date";
     private static final String H_TIME  = "Lcl Time";
     private static final String H_PITCH = "Pitch";
@@ -27,15 +26,14 @@ public class CsvParser {
     private static final String H_LATAC = "LatAc";
     private static final String H_IAS   = "IAS";
     private static final String H_ALT   = "AltMSL";
+    private static final String H_LAT   = "Latitude";
+    private static final String H_LON   = "Longitude";
+    private static final String H_RPM   = "E1 RPM";
 
+    // -- Required Column Sets -----------------------------------------------
     private static final String[] SKID_REQUIRED_COLS = {
-            H_DATE, H_TIME, H_PITCH, H_ROLL, H_LATAC, H_IAS, H_ALT
+            H_DATE, H_TIME, H_PITCH, H_ROLL, H_LATAC, H_IAS, H_ALT, H_LAT, H_LON, H_RPM
     };
-
-    // -- Near miss column names ----------------------------------------------
-    private static final String H_LAT = "Latitude";
-    private static final String H_LON = "Longitude";
-    private static final String H_RPM = "E1 RPM";
 
     private static final String[] NEAR_MISS_REQUIRED_COLS = {
             H_DATE, H_TIME, H_LAT, H_LON, H_ALT, H_IAS, H_RPM
@@ -70,7 +68,7 @@ public class CsvParser {
     // PARSE SKID CSV
     // Returns list of FlightRecord for skid report processing.
     // ========================================================================
-    public static List<FlightRecord> parseSkidCsvFile(File file) throws IOException {
+    public static List<FlightRecord> parseSkidCsvFile(File file, String tail) throws IOException {
         List<String> lines = readLines(file);
         if (lines.size() < 4) return Collections.emptyList();
 
@@ -95,15 +93,22 @@ public class CsvParser {
                 if (date.isEmpty() || time.isEmpty()) continue;
 
                 FlightRecord rec = new FlightRecord();
+                rec.tail  = tail;
                 rec.date  = date;
-                rec.time  = time;
+                rec.time  = DateUtils.normalizeTime(time);
                 rec.pitch = parseDouble(getCol(cols, colIndex, H_PITCH));
                 rec.roll  = parseDouble(getCol(cols, colIndex, H_ROLL));
                 rec.latAc = parseDouble(getCol(cols, colIndex, H_LATAC));
                 rec.ias   = parseDouble(getCol(cols, colIndex, H_IAS));
                 rec.alt   = parseDouble(getCol(cols, colIndex, H_ALT));
+                rec.latitude  = parseDouble(getCol(cols, colIndex, H_LAT));
+                rec.longitude = parseDouble(getCol(cols, colIndex, H_LON));
+                rec.rpm       = parseDouble(getCol(cols, colIndex, H_RPM));
 
-                if (!Double.isNaN(rec.roll) && !Double.isNaN(rec.latAc)) {
+                if (!Double.isNaN(rec.roll) && !Double.isNaN(rec.latAc) 
+                    && !Double.isNaN(rec.latitude) && !Double.isNaN(rec.longitude)
+                    && !Double.isNaN(rec.alt) && !Double.isNaN(rec.ias)
+                    && !Double.isNaN(rec.rpm)) {
                     records.add(rec);
                 }
             } catch (Exception ignored) {}
@@ -113,9 +118,9 @@ public class CsvParser {
 
     // ========================================================================
     // PARSE NEAR MISS CSV
-    // Returns list of NearMissFlightRecord for near-miss processing.
+    // Returns list of FlightRecord for near-miss processing.
     // ========================================================================
-    public static List<NearMissFlightRecord> parseNearMissCsvFile(File file, String tail)
+    public static List<FlightRecord> parseNearMissCsvFile(File file, String tail)
             throws IOException {
 
         List<String> lines = readLines(file);
@@ -130,7 +135,7 @@ public class CsvParser {
             }
         }
 
-        List<NearMissFlightRecord> records = new ArrayList<>();
+        List<FlightRecord> records = new ArrayList<>();
         int lastDataLine = lines.size() - 1;
         for (int i = 3; i < lastDataLine; i++) {
             String line = lines.get(i).trim();
@@ -141,17 +146,17 @@ public class CsvParser {
                 String time = getCol(cols, colIndex, H_TIME).trim();
                 if (date.isEmpty() || time.isEmpty()) continue;
 
-                NearMissFlightRecord rec = new NearMissFlightRecord();
+                FlightRecord rec = new FlightRecord();
                 rec.tail = tail;
                 rec.date = date;
                 rec.time = DateUtils.normalizeTime(time);
-                rec.lat  = parseDouble(getCol(cols, colIndex, H_LAT));
-                rec.lon  = parseDouble(getCol(cols, colIndex, H_LON));
+                rec.latitude  = parseDouble(getCol(cols, colIndex, H_LAT));
+                rec.longitude = parseDouble(getCol(cols, colIndex, H_LON));
                 rec.alt  = parseDouble(getCol(cols, colIndex, H_ALT));
                 rec.ias  = parseDouble(getCol(cols, colIndex, H_IAS));
                 rec.rpm  = parseDouble(getCol(cols, colIndex, H_RPM));
 
-                if (Double.isNaN(rec.lat) || Double.isNaN(rec.lon)
+                if (Double.isNaN(rec.latitude) || Double.isNaN(rec.longitude)
                         || Double.isNaN(rec.alt) || Double.isNaN(rec.ias)
                         || Double.isNaN(rec.rpm)) continue;
 

@@ -18,11 +18,11 @@ public class NearMissEventDao {
 
     private static final String INSERT_SQL =
         "INSERT INTO near_miss_events " +
-        "  (local_date, local_time, tail1, tail2, " +
+        "  (local_date, start_time, end_time, tail1, tail2, " +
         "   latitude1, longitude1, alt1, ias1, " +
         "   latitude2, longitude2, alt2, ias2, " +
-        "   distance_ft, year_month) " +
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        "   min_dist_ft, year_month) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
     // ------------------------------------------------------------------------
     // INSERT: batch insert a list of NearMissEvent rows
@@ -35,19 +35,20 @@ public class NearMissEventDao {
             int count = 0;
             for (NearMissEvent ev : events) {
                 ps.setString(1,  ev.date);
-                ps.setString(2,  ev.time);
-                ps.setString(3,  ev.tail1);
-                ps.setString(4,  ev.tail2);
-                ps.setDouble(5,  ev.lat1);
-                ps.setDouble(6,  ev.lon1);
-                ps.setDouble(7,  ev.alt1);
-                ps.setDouble(8,  ev.ias1);
-                ps.setDouble(9,  ev.lat2);
-                ps.setDouble(10, ev.lon2);
-                ps.setDouble(11, ev.alt2);
-                ps.setDouble(12, ev.ias2);
-                ps.setDouble(13, ev.distanceFt);
-                ps.setString(14, ev.yearMonth);
+                ps.setString(2,  ev.startTime);
+                ps.setString(3,  ev.endTime);
+                ps.setString(4,  ev.tail1);
+                ps.setString(5,  ev.tail2);
+                ps.setDouble(6,  ev.lat1);
+                ps.setDouble(7,  ev.lon1);
+                ps.setDouble(8,  ev.alt1);
+                ps.setDouble(9,  ev.ias1);
+                ps.setDouble(10, ev.lat2);
+                ps.setDouble(11, ev.lon2);
+                ps.setDouble(12, ev.alt2);
+                ps.setDouble(13, ev.ias2);
+                ps.setDouble(14, ev.minDistanceFt);
+                ps.setString(15, ev.yearMonth);
                 ps.addBatch();
                 count++;
                 if (count % 1000 == 0) ps.executeBatch();
@@ -88,12 +89,12 @@ public class NearMissEventDao {
             throws Exception {
 
         String sql =
-            "SELECT local_date, local_time, " +
+            "SELECT local_date, start_time, end_time, " +
             "       latitude1, longitude1, alt1, ias1, " +
-            "       latitude2, longitude2, alt2, ias2, distance_ft " +
+            "       latitude2, longitude2, alt2, ias2, min_dist_ft " +
             "FROM near_miss_events " +
             "WHERE tail1 = ? AND tail2 = ? AND year_month = ? " +
-            "ORDER BY local_date, local_time";
+            "ORDER BY local_date, start_time";
 
         List<NearMissEvent> events = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -103,20 +104,21 @@ public class NearMissEventDao {
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     NearMissEvent ev = new NearMissEvent();
-                    ev.date       = rs.getString("local_date");
-                    ev.time       = rs.getString("local_time");
-                    ev.tail1      = tail1;
-                    ev.tail2      = tail2;
-                    ev.lat1       = rs.getDouble("latitude1");
-                    ev.lon1       = rs.getDouble("longitude1");
-                    ev.alt1       = rs.getDouble("alt1");
-                    ev.ias1       = rs.getDouble("ias1");
-                    ev.lat2       = rs.getDouble("latitude2");
-                    ev.lon2       = rs.getDouble("longitude2");
-                    ev.alt2       = rs.getDouble("alt2");
-                    ev.ias2       = rs.getDouble("ias2");
-                    ev.distanceFt = rs.getDouble("distance_ft");
-                    ev.yearMonth  = yearMonth;
+                    ev.date          = rs.getString("local_date");
+                    ev.startTime     = rs.getString("start_time");
+                    ev.endTime       = rs.getString("end_time");
+                    ev.tail1         = tail1;
+                    ev.tail2         = tail2;
+                    ev.lat1          = rs.getDouble("latitude1");
+                    ev.lon1          = rs.getDouble("longitude1");
+                    ev.alt1          = rs.getDouble("alt1");
+                    ev.ias1          = rs.getDouble("ias1");
+                    ev.lat2          = rs.getDouble("latitude2");
+                    ev.lon2          = rs.getDouble("longitude2");
+                    ev.alt2          = rs.getDouble("alt2");
+                    ev.ias2          = rs.getDouble("ias2");
+                    ev.minDistanceFt = rs.getDouble("min_dist_ft");
+                    ev.yearMonth     = yearMonth;
                     events.add(ev);
                 }
             }

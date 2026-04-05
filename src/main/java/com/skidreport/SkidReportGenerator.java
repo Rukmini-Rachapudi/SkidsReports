@@ -1,5 +1,7 @@
 package com.skidreport;
 
+import com.skidreport.db.DatabaseManager;
+import com.skidreport.db.FlightRecordDao;
 import com.skidreport.excel.SkidExcelWriter;
 import com.skidreport.model.FlightRecord;
 import com.skidreport.model.SkidEvent;
@@ -8,7 +10,12 @@ import com.skidreport.util.CsvParser;
 import com.skidreport.util.DateUtils;
 
 import java.io.File;
-import java.io.IOException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -42,9 +49,13 @@ public class SkidReportGenerator {
             "06H","97B","59Y","78K","49K","29E","82P"
     };
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
+        String dayFolder = LocalDate.now()
+                .format(DateTimeFormatter.ofPattern("d-MMM-yyyy"))
+                .toLowerCase();  // e.g. "4-apr-2026"
+
         File rootDir   = new File(INPUT_PATH);
-        File outputDir = new File(OUTPUT_PATH);
+        File outputDir = new File(OUTPUT_PATH + "\\" + dayFolder + "\\Skid Reports");
 
         if (!rootDir.exists() || !rootDir.isDirectory()) {
             System.err.println("ERROR: INPUT_PATH not found: " + INPUT_PATH);
@@ -52,9 +63,32 @@ public class SkidReportGenerator {
         }
 
         outputDir.mkdirs();
+        File nmDir = new File(OUTPUT_PATH + "\\" + dayFolder + "\\NearMiss");
+        nmDir.mkdirs();
+        String dbPath = nmDir.getAbsolutePath() + "\\near_miss.db";
+
         System.out.println("Input      : " + INPUT_PATH);
-        System.out.println("Output     : " + OUTPUT_PATH);
+        System.out.println("Output     : " + outputDir.getAbsolutePath());
+        System.out.println("Database   : " + dbPath);
         System.out.println("Batch size : " + BATCH_SIZE);
+
+        Class.forName("org.sqlite.JDBC");
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
+            applyPragmas(conn);
+            conn.setAutoCommit(false);
+            run(conn, rootDir, outputDir);
+        }
+    }
+
+    /**
+     * Core processing logic - called by main() and by MainRunner (shared connection).
+     */
+    public static void run(Connection conn, File rootDir, File outputDir) throws Exception {
+        outputDir.mkdirs();
+
+        System.out.println("\nInitializing database...");
+        DatabaseManager.createTablesIfAbsent(conn);
+        conn.commit();
 
         File[] subdirs = rootDir.listFiles(File::isDirectory);
         if (subdirs == null || subdirs.length == 0) {
@@ -67,7 +101,7 @@ public class SkidReportGenerator {
             String tail = detectTailNumber(dir.getName());
             if (tail != null) {
                 System.out.println("\n--- Processing " + tail + " ---");
-                processFlightFolder(tail, dir, outputDir);
+                processFlightFolder(conn, tail, dir, outputDir);
                 anyProcessed = true;
             }
         }
@@ -79,10 +113,18 @@ public class SkidReportGenerator {
         System.out.println("\nSkid reports written to: " + outputDir.getAbsolutePath());
     }
 
+    static void applyPragmas(Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement()) {
+            st.execute("PRAGMA journal_mode=WAL");
+            st.execute("PRAGMA synchronous=NORMAL");
+            st.execute("PRAGMA cache_size=10000");
+        }
+    }
+
     // ------------------------------------------------------------------------
     // FLIGHT FOLDER
     // ------------------------------------------------------------------------
-    private static void processFlightFolder(String tail, File flightDir, File outputDir) {
+    private static void processFlightFolder(Connection conn, String tail, File flightDir, File outputDir) {
         List<File> csvFiles = new ArrayList<>();
         CsvParser.collectCsvFiles(flightDir, csvFiles);
         System.out.println("  CSV files found: " + csvFiles.size());
@@ -92,7 +134,7 @@ public class SkidReportGenerator {
             return;
         }
 
-        processBatches(tail, csvFiles, outputDir);
+        processBatches(conn, tail, csvFiles, outputDir);
     }
 
     // ------------------------------------------------------------------------
@@ -100,7 +142,7 @@ public class SkidReportGenerator {
     // Reads BATCH_SIZE files at a time, accumulates skid events into byMonth,
     // then writes one Excel per month after all batches complete.
     // ------------------------------------------------------------------------
-    private static void processBatches(String tail, List<File> allFiles, File outputDir) {
+    private static void processBatches(Connection conn, String tail, List<File> allFiles, File outputDir) {
 
         // key: YYYY-MM
         Map<String, List<SkidEvent>> byMonth = new LinkedHashMap<>();
@@ -121,9 +163,20 @@ public class SkidReportGenerator {
 
             for (File csv : batch) {
                 try {
-                    List<FlightRecord> records = CsvParser.parseSkidCsvFile(csv);
-                    FlightRecord prevRec = null;
+                    List<FlightRecord> records = CsvParser.parseSkidCsvFile(csv, tail);
+                    
+                    // SAVE RELEVANT RECORDS TO DATABASE (for near-miss comparison later)
+                    // We filter for "In Flight" data to keep DB size small and analysis fast
+                    List<FlightRecord> flightOnly = new ArrayList<>();
+                    for (FlightRecord r : records) {
+                        if (r.ias > 30 && r.alt > 100 && r.rpm > 1700) {
+                            flightOnly.add(r);
+                        }
+                    }
+                    FlightRecordDao.insertBatch(conn, flightOnly);
+                    conn.commit();
 
+                    FlightRecord prevRec = null;
                     for (FlightRecord rec : records) {
 
                         // SKID CONDITION

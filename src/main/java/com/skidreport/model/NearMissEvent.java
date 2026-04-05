@@ -6,17 +6,12 @@ package com.skidreport.model;
  */
 public class NearMissEvent {
     public String date;
-    public String time;
+    public String startTime;
+    public String endTime;
     public String tail1;
     public String tail2;
-    public double lat1;
-    public double lon1;
-    public double alt1;
-    public double ias1;
-    public double lat2;
-    public double lon2;
-    public double alt2;
-    public double ias2;
-    public double distanceFt;
-    public String yearMonth;   // YYYY-MM for grouping
+    public double lat1, lon1, alt1, ias1;
+    public double lat2, lon2, alt2, ias2;
+    public double minDistanceFt;
+    public String yearMonth;
 }

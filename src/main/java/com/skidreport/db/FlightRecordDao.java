@@ -1,7 +1,7 @@
 package com.skidreport.db;
 
 import com.skidreport.model.AircraftSnapshot;
-import com.skidreport.model.NearMissFlightRecord;
+import com.skidreport.model.FlightRecord;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -24,21 +24,21 @@ public class FlightRecordDao {
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
     // ------------------------------------------------------------------------
-    // INSERT: batch insert a list of NearMissFlightRecord rows
+    // INSERT: batch insert a list of FlightRecord rows
     // Flushes every 5000 rows to keep memory low
     // ------------------------------------------------------------------------
     public static void insertBatch(Connection conn,
-                                   List<NearMissFlightRecord> records) throws Exception {
+                                   List<FlightRecord> records) throws Exception {
         if (records.isEmpty()) return;
 
         try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
             int count = 0;
-            for (NearMissFlightRecord rec : records) {
+            for (FlightRecord rec : records) {
                 ps.setString(1, rec.tail);
                 ps.setString(2, rec.date);
                 ps.setString(3, rec.time);
-                ps.setDouble(4, rec.lat);
-                ps.setDouble(5, rec.lon);
+                ps.setDouble(4, rec.latitude);
+                ps.setDouble(5, rec.longitude);
                 ps.setDouble(6, rec.alt);
                 ps.setDouble(7, rec.ias);
                 ps.setDouble(8, rec.rpm);
@@ -64,20 +64,36 @@ public class FlightRecordDao {
     }
 
     // ------------------------------------------------------------------------
+    // COUNT: total number of flight records in DB
+    // Used to detect if SkidReportGenerator already populated the DB
+    // ------------------------------------------------------------------------
+    public static long countRecords(Connection conn) throws Exception {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM flight_records")) {
+            return rs.next() ? rs.getLong(1) : 0L;
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // FETCH: load all aircraft snapshots for a given date
     // Populates byTime map: HH:MM:SS -> list of AircraftSnapshot
-    // Used by near-miss pairwise comparison
+    // FETCH: load aircraft snapshots for a given date in a specific time range
+    // Populates byTime map: HH:MM:SS -> list of AircraftSnapshot
+    // Used by near-miss pairwise comparison to avoid loading full days at once
     // ------------------------------------------------------------------------
-    public static void loadByDate(Connection conn, String date,
-                                  Map<String, List<AircraftSnapshot>> byTime) throws Exception {
+    public static void loadByTimeRange(Connection conn, String date,
+                                       String startTime, String endTime,
+                                       Map<String, List<AircraftSnapshot>> byTime) throws Exception {
         String sql =
             "SELECT tail, local_time, latitude, longitude, alt_msl, ias " +
             "FROM flight_records " +
-            "WHERE local_date = ? " +
+            "WHERE local_date = ? AND local_time >= ? AND local_time < ? " +
             "ORDER BY local_time, tail";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, date);
+            ps.setString(2, startTime);
+            ps.setString(3, endTime);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     AircraftSnapshot snap = new AircraftSnapshot();
